@@ -54,53 +54,21 @@ DEFAULT_CARTE = {
 # ─── CSS personnalisé ─────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Fond général */
-[data-testid="stAppViewContainer"] { background: #181B2E; }
-[data-testid="stSidebar"] { background: #22263D; }
-[data-testid="stSidebar"] > div { padding-top: 1rem; }
-
-/* Header catégorie */
-.cat-header {
-    padding: 6px 14px; border-radius: 6px 6px 0 0;
-    font-weight: 700; font-size: 0.82rem; letter-spacing: 0.08em;
-    color: white; margin-bottom: 0;
+[data-testid="stAppViewContainer"] { background: #181B2E !important; }
+[data-testid="stSidebar"]          { background: #22263D !important; }
+[data-testid="stSidebar"] > div    { padding-top: 1rem; }
+.block-container { padding-top: 1.4rem; padding-bottom: 2rem; }
+div[data-testid="stCheckbox"] label p { color: #E8EAF6 !important; font-size: 0.95rem; }
+.sidebar-label {
+    font-size: 0.70rem; font-weight: 700;
+    color: #555A82; letter-spacing: 0.12em;
+    margin: 14px 0 3px 0;
 }
-.cat-block {
-    border-radius: 0 0 6px 6px;
-    padding: 10px 14px 6px 14px;
-    margin-bottom: 12px;
-    background: #22263D;
-    border: 1px solid #32375A;
-    border-top: none;
-}
-/* Carte permanente séparateur */
-.carte-sep {
-    background: #3AACAC22;
-    border: 1px solid #3AACAC;
-    border-radius: 8px;
-    padding: 8px 16px;
-    margin: 16px 0 8px 0;
-    color: #3AACAC;
-    font-weight: 700;
-    font-size: 0.9rem;
-}
-/* Recap badge */
 .recap-ok  { color: #3DBE6E; font-weight: 700; }
 .recap-non { color: #555A82; }
-
-/* Titres sidebar */
-.sidebar-label {
-    font-size: 0.72rem; font-weight: 700;
-    color: #555A82; letter-spacing: 0.12em;
-    margin: 14px 0 4px 0;
-}
-/* Boutons jours */
-div[data-testid="column"] button {
-    width: 100%; border-radius: 6px;
-}
-/* Supprime le padding excessif Streamlit */
-.block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-div[data-testid="stCheckbox"] label { color: #E8EAF6 !important; }
+div[data-testid="column"] button { width: 100%; border-radius: 6px; }
+/* Supprime le fond blanc parasite sur les containers */
+div[data-testid="stVerticalBlock"] > div { background: transparent !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -419,8 +387,24 @@ def save_commande(sal, jour, choix):
     st.session_state.commandes.setdefault(wk,{}).setdefault(sal,{})[jour] = choix
     save_json(DATA_FILE, st.session_state.commandes)
 
-def color_badge(color, text):
-    return f'<div class="cat-header" style="background:{color}">{text}</div>'
+def cat_header(color, text, icon=""):
+    """Bandeau coloré auto-contenu — fonctionne indépendamment du CSS externe."""
+    return (
+        f'<div style="background:{color};padding:7px 16px;border-radius:8px 8px 0 0;'
+        f'font-weight:700;font-size:0.83rem;letter-spacing:0.07em;color:#fff;'
+        f'margin-top:14px;margin-bottom:0;">'
+        f'{icon}{text}</div>'
+        f'<div style="background:#22263D;border:1px solid {color}44;border-top:none;'
+        f'border-radius:0 0 8px 8px;padding:10px 8px 4px 8px;margin-bottom:4px;">'
+    )
+
+CAT_ICONS = {
+    "Entrées":           "🥗 ",
+    "Plats garnis":      "🍖 ",
+    "Accompagnements":   "🥦 ",
+    "Produits laitiers": "🧀 ",
+    "Desserts":          "🍮 ",
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -523,42 +507,46 @@ if st.session_state.page == "commande":
             if not items:
                 continue
             color = CAT_COLORS[cat]
-            st.markdown(color_badge(color, cat.upper()), unsafe_allow_html=True)
-            with st.container():
-                st.markdown('<div class="cat-block">', unsafe_allow_html=True)
-                selected_in_cat = existing.get(cat, [])
-                cols = st.columns(2)
-                for i, item in enumerate(items):
-                    with cols[i % 2]:
-                        checked = st.checkbox(item, value=(item in selected_in_cat),
-                                              key=f"cb_{wk}_{sal}_{jour}_{cat}_{item}")
-                        if checked:
-                            choix.setdefault(cat, []).append(item)
-                st.markdown('</div>', unsafe_allow_html=True)
+            icon  = CAT_ICONS.get(cat, "")
+            selected_in_cat = existing.get(cat, [])
+
+            st.markdown(cat_header(color, cat.upper(), icon), unsafe_allow_html=True)
+            cols = st.columns(2)
+            for i, item in enumerate(items):
+                with cols[i % 2]:
+                    checked = st.checkbox(item, value=(item in selected_in_cat),
+                                          key=f"cb_{wk}_{sal}_{jour}_{cat}_{item}")
+                    if checked:
+                        choix.setdefault(cat, []).append(item)
+            st.markdown('</div>', unsafe_allow_html=True)
 
         # ── Carte permanente ──
         if has_carte:
             st.markdown(
-                '<div class="carte-sep">🗂 CARTE DU JOUR — Articles permanents</div>',
+                '<div style="background:#3AACAC18;border:1.5px solid #3AACAC;border-radius:8px;'
+                'padding:9px 18px;margin:22px 0 6px 0;color:#3AACAC;font-weight:700;font-size:0.92rem;">'
+                '🗂&nbsp; CARTE DU JOUR — Articles permanents</div>',
                 unsafe_allow_html=True)
             for sub_cat in CAT_MENU:
                 items = carte.get(sub_cat, [])
                 if not items:
                     continue
-                color = CAT_COLORS["Carte du jour"]
+                color   = CAT_COLORS[sub_cat]   # chaque sous-cat garde SA couleur
                 cmd_key = f"Carte · {sub_cat}"
-                st.markdown(color_badge(color, f"↳ {sub_cat}"), unsafe_allow_html=True)
-                with st.container():
-                    st.markdown('<div class="cat-block">', unsafe_allow_html=True)
-                    selected_in_cat = existing.get(cmd_key, [])
-                    cols = st.columns(2)
-                    for i, item in enumerate(items):
-                        with cols[i % 2]:
-                            checked = st.checkbox(item, value=(item in selected_in_cat),
-                                                  key=f"cb_{wk}_{sal}_{jour}_{cmd_key}_{item}")
-                            if checked:
-                                choix.setdefault(cmd_key, []).append(item)
-                    st.markdown('</div>', unsafe_allow_html=True)
+                icon    = CAT_ICONS.get(sub_cat, "")
+                selected_in_cat = existing.get(cmd_key, [])
+
+                st.markdown(
+                    cat_header(color, f"↳ {sub_cat.upper()} (carte)", icon),
+                    unsafe_allow_html=True)
+                cols = st.columns(2)
+                for i, item in enumerate(items):
+                    with cols[i % 2]:
+                        checked = st.checkbox(item, value=(item in selected_in_cat),
+                                              key=f"cb_{wk}_{sal}_{jour}_{cmd_key}_{item}")
+                        if checked:
+                            choix.setdefault(cmd_key, []).append(item)
+                st.markdown('</div>', unsafe_allow_html=True)
 
         # ── Bouton valider ──
         st.markdown("<br>", unsafe_allow_html=True)
@@ -625,7 +613,12 @@ elif st.session_state.page == "menu":
             jour_data = menu.get("jours",{}).get(jour,{})
             for cat in CAT_MENU:
                 color = CAT_COLORS[cat]
-                st.markdown(color_badge(color, cat), unsafe_allow_html=True)
+                icon  = CAT_ICONS.get(cat, "")
+                st.markdown(
+                    f'<div style="background:{color};padding:6px 14px;border-radius:6px;'
+                    f'font-weight:700;font-size:0.82rem;color:#fff;margin:10px 0 4px 0;">'
+                    f'{icon}{cat}</div>',
+                    unsafe_allow_html=True)
                 val = "\n".join(jour_data.get(cat,[]))
                 txt = st.text_area(
                     f"Un article par ligne",
@@ -655,7 +648,12 @@ elif st.session_state.page == "carte":
     for t, cat in zip(tabs, CAT_MENU):
         with t:
             color = CAT_COLORS[cat]
-            st.markdown(color_badge(color, cat), unsafe_allow_html=True)
+            icon  = CAT_ICONS.get(cat, "")
+            st.markdown(
+                f'<div style="background:{color};padding:6px 14px;border-radius:6px;'
+                f'font-weight:700;font-size:0.82rem;color:#fff;margin:10px 0 4px 0;">'
+                f'{icon}{cat}</div>',
+                unsafe_allow_html=True)
             val = "\n".join(carte.get(cat, []))
             txt = st.text_area(
                 "Un article par ligne",
