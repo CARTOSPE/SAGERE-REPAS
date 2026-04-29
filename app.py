@@ -680,7 +680,7 @@ elif st.session_state.page == "menu":
         periode_defaut = week_label(wk)
 
     periode = st.text_input("Période (ex: Du 02 juin au 06 juin 2026)",
-                             value=periode_defaut, key="periode_input")
+                             value=periode_defaut, key=f"periode_input_{wk}")
     tabs = st.tabs(JOURS); new_jours = {}
     for t, jour in zip(tabs, JOURS):
         with t:
