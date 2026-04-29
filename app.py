@@ -128,13 +128,19 @@ def _gs_save(tab, key, value):
     ws.append_row([key, val])
 
 # ── API unifiée ───────────────────────────────────────────────────────────────
+def _gs_error(e):
+    """Stocke l'erreur Sheets pour affichage unique dans init_state."""
+    msg = f"Google Sheets inaccessible (erreur {type(e).__name__}: {e}) — données locales utilisées."
+    if "_gs_error" not in st.session_state:
+        st.session_state._gs_error = msg
+
 def load_menus():
     if _use_gsheets():
         try:
             data = _gs_load("menus")
             if data: return data
         except Exception as e:
-            st.warning(f"⚠️ Google Sheets inaccessible, utilisation des données locales. ({e})")
+            _gs_error(e)
     data = _load_json(MENUS_FILE, {})
     if not data:
         wk   = week_key()
@@ -145,7 +151,7 @@ def save_menu(wk, menu):
     _save_json(MENUS_FILE, {**load_menus_local(), wk: menu})
     if _use_gsheets():
         try:    _gs_save("menus", wk, menu)
-        except Exception as e: st.error(f"⚠️ Sheets : {e}")
+        except Exception as e: st.error(f"⚠️ Sheets (écriture) : {e}")
 
 def load_menus_local():
     return _load_json(MENUS_FILE, {})
@@ -156,7 +162,7 @@ def load_commandes():
             data = _gs_load("commandes")
             if data: return data
         except Exception as e:
-            st.warning(f"⚠️ Google Sheets inaccessible, utilisation des données locales. ({e})")
+            _gs_error(e)
     return _load_json(DATA_FILE, {})
 
 def save_commandes_wk(wk, cmds):
@@ -165,30 +171,30 @@ def save_commandes_wk(wk, cmds):
     _save_json(DATA_FILE, all_cmds)
     if _use_gsheets():
         try:    _gs_save("commandes", wk, cmds)
-        except Exception as e: st.error(f"⚠️ Sheets : {e}")
+        except Exception as e: st.error(f"⚠️ Sheets (écriture) : {e}")
 
 def load_salaries():
     if _use_gsheets():
         try:
             data = _gs_load("config")
             if "salaries" in data: return data["salaries"]
-        except Exception:
-            pass
+        except Exception as e:
+            _gs_error(e)
     return _load_json(SALARIES_FILE, DEFAULT_SALARIES)
 
 def save_salaries(s):
     _save_json(SALARIES_FILE, s)
     if _use_gsheets():
         try:    _gs_save("config","salaries",s)
-        except Exception as e: st.error(f"⚠️ Sheets : {e}")
+        except Exception as e: st.error(f"⚠️ Sheets (écriture) : {e}")
 
 def load_carte():
     if _use_gsheets():
         try:
             data = _gs_load("config")
             if "carte" in data: return data["carte"]
-        except Exception:
-            pass
+        except Exception as e:
+            _gs_error(e)
     return _load_json(CARTE_FILE, DEFAULT_CARTE)
 
 def save_carte(c):
@@ -227,11 +233,17 @@ def parse_traiteur_html(raw):
         except: pass
     if not content: raise ValueError("Impossible de décoder le fichier.")
     soup    = BeautifulSoup(content,"html.parser")
-    periode = ""
+    periode_raw = ""
     p = soup.find("p", class_="block_date")
-    if p: periode = p.get_text(strip=True)
-    m  = re.search(r'(\d{4})-S(\d{2})', periode)
+    if p: periode_raw = p.get_text(strip=True)
+
+    # Extraire la clé semaine depuis le texte brut (ex: "2026-S23-Menu...")
+    m  = re.search(r'(\d{4})-S(\d{2})', periode_raw)
     sk = f"{m.group(1)}-S{m.group(2)}" if m else week_key()
+
+    # Nettoyer la période via la fonction centrale
+    periode_clean = clean_periode(periode_raw, sk)
+
     tables     = soup.find_all("table", class_="table_recette")
     jours_data = {j:{c:[] for c in CAT_MENU} for j in JOURS}
     if len(tables) >= 25:
@@ -241,16 +253,35 @@ def parse_traiteur_html(raw):
                 jours_data[jour][cat] = [
                     tr.get_text(strip=True) for tr in t.find_all("tr")
                     if tr.get_text(strip=True)]
-    return {"semaine":sk,"periode":periode,"jours":jours_data}
+    return {"semaine":sk, "periode":periode_clean, "jours":jours_data}
 
 # ─── UI helpers ───────────────────────────────────────────────────────────────
-def cat_header(color, text, icon=""):
+def clean_periode(raw, wk=None):
+    """
+    Nettoie la période pour n'afficher que la partie lisible.
+    Ex: '2026-S19-Menu Entreprise 5 jours - Du 04 mai 2026 au 08 mai 2026 -'
+     → 'Du 04 mai 2026 au 08 mai 2026'
+    Si vide ou illisible, retourne le label calculé depuis wk.
+    """
+    if not raw or not raw.strip():
+        return week_label(wk) if wk else ""
+    raw = raw.strip()
+    # Chercher "Du XX mois YYYY au XX mois YYYY"
+    m = re.search(r'(Du\s+\d+\s+\w+\s+\d{4}\s+au\s+\d+\s+\w+\s+\d{4})', raw, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # Fallback : supprimer le préfixe YYYY-SNN et les mots parasites
+    cleaned = re.sub(r'^\d{4}-S\d{2}[-_\s]*', '', raw)
+    cleaned = re.sub(r'^[\w\s]+(jours?|days?)\s*[-–]\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(' -–')
+    # Si encore trop long ou contient des codes techniques, utiliser le label
+    if len(cleaned) > 60 or re.search(r'\d{4}-S\d{2}', cleaned):
+        return week_label(wk) if wk else raw
+    return cleaned or (week_label(wk) if wk else raw)
     return (
         f'<div style="background:{color};padding:7px 16px;border-radius:8px 8px 0 0;'
         f'font-weight:700;font-size:0.83rem;letter-spacing:0.07em;color:#fff;'
-        f'margin-top:14px;margin-bottom:0;">{icon}{text}</div>'
-        f'<div style="background:#22263D;border:1px solid {color}55;border-top:none;'
-        f'border-radius:0 0 8px 8px;padding:10px 8px 4px 8px;margin-bottom:4px;">'
+        f'margin-top:14px;margin-bottom:2px;">{icon}{text}</div>'
     )
 
 def inline_label(color, icon, text):
@@ -408,8 +439,25 @@ def init_state():
             st.session_state.salaries  = load_salaries()
             st.session_state.carte     = load_carte()
             st.session_state.loaded    = True
-            mode = "Google Sheets ☁️" if _use_gsheets() else "Fichiers locaux 💾"
-            st.session_state._storage_mode = mode
+            # Mode réel : Sheets si configuré ET sans erreur 404
+            gs_ok = _use_gsheets() and "_gs_error" not in st.session_state
+            st.session_state._storage_mode = "Google Sheets ☁️" if gs_ok else "Fichiers locaux 💾"
+
+    # Afficher l'erreur Sheets une seule fois, clairement
+    if "_gs_error" in st.session_state:
+        err = st.session_state.pop("_gs_error")
+        if "404" in str(err):
+            st.warning(
+                "⚠️ **Google Sheets introuvable (erreur 404)**\n\n"
+                "L'ID du Sheet dans `secrets.toml` est incorrect ou le Sheet n'est pas partagé.\n\n"
+                "**À vérifier :**\n"
+                "1. Ouvrez votre Google Sheet → copiez l'ID depuis l'URL (entre `/d/` et `/edit`)\n"
+                "2. Collez-le dans `secrets.toml` → `spreadsheet_id = \"VOTRE_ID\"`\n"
+                "3. Vérifiez que le Sheet est partagé avec `sagere-sheets@sagere.iam.gserviceaccount.com`\n\n"
+                "*En attendant, les données sont sauvegardées localement.*"
+            )
+        else:
+            st.warning(f"⚠️ Google Sheets inaccessible — données locales utilisées.\n\n`{err}`")
 
     if "page"     not in st.session_state: st.session_state.page     = "commande"
     if "week_sel" not in st.session_state: st.session_state.week_sel = week_key()
@@ -516,36 +564,50 @@ if st.session_state.page == "commande":
         for cat in CAT_MENU:
             items = jour_menu.get(cat,[])
             if not items: continue
-            color = CAT_COLORS[cat]; icon = CAT_ICONS.get(cat,"")
+            color    = CAT_COLORS[cat]
+            icon     = CAT_ICONS.get(cat,"")
             selected = existing.get(cat,[])
+            # Bandeau coloré
             st.markdown(cat_header(color, cat.upper(), icon), unsafe_allow_html=True)
+            # Fond du bloc via container stylé
+            st.markdown(
+                f'<div style="background:#22263D;border:1px solid {color}55;'
+                f'border-top:none;border-radius:0 0 8px 8px;padding:8px 4px 4px 4px;'
+                f'margin-bottom:10px;"></div>',
+                unsafe_allow_html=True)
             cols = st.columns(2)
-            for i,item in enumerate(items):
-                with cols[i%2]:
+            for i, item in enumerate(items):
+                with cols[i % 2]:
                     if st.checkbox(item, value=(item in selected),
                                    key=f"cb_{wk}_{sal}_{jour}_{cat}_{i}"):
                         choix.setdefault(cat,[]).append(item)
-            st.markdown('</div>', unsafe_allow_html=True)
 
         if has_carte:
             st.markdown(
                 '<div style="background:#3AACAC18;border:1.5px solid #3AACAC;border-radius:8px;'
                 'padding:9px 18px;margin:22px 0 6px 0;color:#3AACAC;font-weight:700;font-size:0.92rem;">'
-                '🗂&nbsp; CARTE DU JOUR — Articles permanents</div>', unsafe_allow_html=True)
+                '🗂&nbsp; CARTE DU JOUR — Articles permanents</div>',
+                unsafe_allow_html=True)
             for sub in CAT_MENU:
-                items = carte.get(sub,[])
+                items   = carte.get(sub,[])
                 if not items: continue
-                color   = CAT_COLORS[sub]; icon = CAT_ICONS.get(sub,"")
-                cmd_key = f"Carte · {sub}"; selected = existing.get(cmd_key,[])
+                color   = CAT_COLORS[sub]
+                icon    = CAT_ICONS.get(sub,"")
+                cmd_key = f"Carte · {sub}"
+                selected = existing.get(cmd_key,[])
                 st.markdown(cat_header(color, f"↳ {sub.upper()} (carte)", icon),
                             unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:#22263D;border:1px solid {color}55;'
+                    f'border-top:none;border-radius:0 0 8px 8px;padding:8px 4px 4px 4px;'
+                    f'margin-bottom:10px;"></div>',
+                    unsafe_allow_html=True)
                 cols = st.columns(2)
-                for i,item in enumerate(items):
-                    with cols[i%2]:
+                for i, item in enumerate(items):
+                    with cols[i % 2]:
                         if st.checkbox(item, value=(item in selected),
                                        key=f"cb_{wk}_{sal}_{jour}_{cmd_key}_{i}"):
                             choix.setdefault(cmd_key,[]).append(item)
-                st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("✓  Valider ma commande", type="primary", use_container_width=True):
@@ -588,7 +650,11 @@ elif st.session_state.page == "menu":
 
     st.divider()
     st.markdown("### ✏️ Saisie manuelle")
-    periode = st.text_input("Période", value=menu.get("periode",""), key="periode_input")
+
+    # Période : nettoyer si elle vient d'un ancien import, sinon proposer le label de semaine
+    periode_defaut = clean_periode(menu.get("periode",""), wk)
+    periode = st.text_input("Période (ex: Du 02 juin au 06 juin 2026)",
+                             value=periode_defaut, key="periode_input")
     tabs = st.tabs(JOURS); new_jours = {}
     for t, jour in zip(tabs, JOURS):
         with t:
@@ -676,7 +742,8 @@ elif st.session_state.page == "admin":
     commandes = st.session_state.commandes.get(wk,{})
     salaries  = st.session_state.salaries
     carte     = st.session_state.carte
-    periode   = menu.get("periode","").strip() or week_label(wk)
+    # Toujours nettoyer la période — corrige les anciennes données mal formatées
+    periode   = clean_periode(menu.get("periode",""), wk)
     st.markdown(f"**Semaine :** {week_label(wk)}  —  *{periode}*")
 
     st.markdown("### 📤 Bon de commande traiteur")
