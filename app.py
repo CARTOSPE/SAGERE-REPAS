@@ -284,6 +284,14 @@ def clean_periode(raw, wk=None):
         f'margin-top:14px;margin-bottom:2px;">{icon}{text}</div>'
     )
 
+def cat_header(color, text, icon=""):
+    """Bandeau coloré auto-fermé — sans div ouvert."""
+    return (
+        f'<div style="background:{color};padding:7px 16px;border-radius:8px 8px 0 0;'
+        f'font-weight:700;font-size:0.83rem;letter-spacing:0.07em;color:#fff;'
+        f'margin-top:14px;margin-bottom:2px;">{icon}{text}</div>'
+    )
+
 def inline_label(color, icon, text):
     return (f'<div style="background:{color};padding:6px 14px;border-radius:6px;'
             f'font-weight:700;font-size:0.82rem;color:#fff;margin:10px 0 4px 0;">'
