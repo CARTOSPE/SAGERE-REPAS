@@ -258,10 +258,9 @@ def parse_traiteur_html(raw):
 # ─── UI helpers ───────────────────────────────────────────────────────────────
 def clean_periode(raw, wk=None):
     """
-    Nettoie la période pour n'afficher que la partie lisible.
-    Ex: '2026-S19-Menu Entreprise 5 jours - Du 04 mai 2026 au 08 mai 2026 -'
-     → 'Du 04 mai 2026 au 08 mai 2026'
-    Si vide ou illisible, retourne le label calculé depuis wk.
+    Nettoie la période : 'YYYY-SNN-Menu... - Du 04 mai 2026 au 08 mai 2026 -'
+    → 'Du 04 mai 2026 au 08 mai 2026'
+    Si vide ou illisible → week_label(wk)
     """
     if not raw or not raw.strip():
         return week_label(wk) if wk else ""
@@ -274,15 +273,10 @@ def clean_periode(raw, wk=None):
     cleaned = re.sub(r'^\d{4}-S\d{2}[-_\s]*', '', raw)
     cleaned = re.sub(r'^[\w\s]+(jours?|days?)\s*[-–]\s*', '', cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip(' -–')
-    # Si encore trop long ou contient des codes techniques, utiliser le label
+    # Si encore illisible, utiliser le label calculé
     if len(cleaned) > 60 or re.search(r'\d{4}-S\d{2}', cleaned):
         return week_label(wk) if wk else raw
     return cleaned or (week_label(wk) if wk else raw)
-    return (
-        f'<div style="background:{color};padding:7px 16px;border-radius:8px 8px 0 0;'
-        f'font-weight:700;font-size:0.83rem;letter-spacing:0.07em;color:#fff;'
-        f'margin-top:14px;margin-bottom:2px;">{icon}{text}</div>'
-    )
 
 def cat_header(color, text, icon=""):
     """Bandeau coloré auto-fermé — sans div ouvert."""
