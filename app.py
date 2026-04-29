@@ -278,6 +278,25 @@ def clean_periode(raw, wk=None):
         return week_label(wk) if wk else raw
     return cleaned or (week_label(wk) if wk else raw)
 
+def _periode_coherente(periode, wk):
+    """Retourne True si la période correspond au lundi de la semaine wk."""
+    try:
+        yr, sw = wk.split("-S"); yr, sw = int(yr), int(sw)
+        monday = date.fromisocalendar(yr, sw, 1)
+        mois_fr = {"janvier":1,"février":2,"mars":3,"avril":4,"mai":5,
+                   "juin":6,"juillet":7,"août":8,"septembre":9,
+                   "octobre":10,"novembre":11,"décembre":12}
+        m = re.search(r'(\d+)\s+(\w+)\s+(\d{4})', periode)
+        if m:
+            jour_n = int(m.group(1))
+            mois_n = mois_fr.get(m.group(2).lower(), 0)
+            annee  = int(m.group(3))
+            if mois_n and date(annee, mois_n, jour_n) == monday:
+                return True
+        return False
+    except Exception:
+        return False
+
 def cat_header(color, text, icon=""):
     """Bandeau coloré auto-fermé — sans div ouvert."""
     return (
@@ -653,8 +672,13 @@ elif st.session_state.page == "menu":
     st.divider()
     st.markdown("### ✏️ Saisie manuelle")
 
-    # Période : nettoyer si elle vient d'un ancien import, sinon proposer le label de semaine
-    periode_defaut = clean_periode(menu.get("periode",""), wk)
+    # Même logique que la page admin : vérifier la cohérence de la période stockée
+    periode_stockee  = clean_periode(menu.get("periode",""), wk)
+    if _periode_coherente(periode_stockee, wk):
+        periode_defaut = periode_stockee
+    else:
+        periode_defaut = week_label(wk)
+
     periode = st.text_input("Période (ex: Du 02 juin au 06 juin 2026)",
                              value=periode_defaut, key="periode_input")
     tabs = st.tabs(JOURS); new_jours = {}
@@ -749,33 +773,9 @@ elif st.session_state.page == "admin":
     # ne correspond pas à la semaine sélectionnée, on force week_label(wk)
     periode_stockee = clean_periode(menu.get("periode",""), wk)
 
-    # Vérifier la cohérence : extraire l'année+semaine de la période stockée
-    # et comparer avec wk. Si incohérent → forcer week_label(wk)
-    def _periode_coherente(periode, wk):
-        """Retourne True si la période correspond à la bonne semaine."""
-        from datetime import date, timedelta
-        try:
-            yr, sw = wk.split("-S"); yr, sw = int(yr), int(sw)
-            monday = date.fromisocalendar(yr, sw, 1)
-            friday = monday + timedelta(days=4)
-            # Chercher le mois/année de début dans la période
-            mois_fr = {"janvier":1,"février":2,"mars":3,"avril":4,"mai":5,
-                       "juin":6,"juillet":7,"août":8,"septembre":9,
-                       "octobre":10,"novembre":11,"décembre":12}
-            m = re.search(r'(\d+)\s+(\w+)\s+(\d{4})', periode)
-            if m:
-                jour, mois_txt, annee = int(m.group(1)), m.group(2).lower(), int(m.group(3))
-                mois_num = mois_fr.get(mois_txt, 0)
-                if mois_num and date(annee, mois_num, jour) == monday:
-                    return True
-            return False
-        except Exception:
-            return False
-
     if _periode_coherente(periode_stockee, wk):
         periode = periode_stockee
     else:
-        # La période stockée ne correspond pas → utiliser le label calculé
         periode = week_label(wk)
 
     st.markdown(f"**Semaine :** {week_label(wk)}  —  *{periode}*")
