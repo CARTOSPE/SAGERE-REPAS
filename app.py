@@ -744,8 +744,40 @@ elif st.session_state.page == "admin":
     commandes = st.session_state.commandes.get(wk,{})
     salaries  = st.session_state.salaries
     carte     = st.session_state.carte
-    # Toujours nettoyer la période — corrige les anciennes données mal formatées
-    periode   = clean_periode(menu.get("periode",""), wk)
+
+    # Période : on nettoie ce qui est stocké, MAIS si la période nettoyée
+    # ne correspond pas à la semaine sélectionnée, on force week_label(wk)
+    periode_stockee = clean_periode(menu.get("periode",""), wk)
+
+    # Vérifier la cohérence : extraire l'année+semaine de la période stockée
+    # et comparer avec wk. Si incohérent → forcer week_label(wk)
+    def _periode_coherente(periode, wk):
+        """Retourne True si la période correspond à la bonne semaine."""
+        from datetime import date, timedelta
+        try:
+            yr, sw = wk.split("-S"); yr, sw = int(yr), int(sw)
+            monday = date.fromisocalendar(yr, sw, 1)
+            friday = monday + timedelta(days=4)
+            # Chercher le mois/année de début dans la période
+            mois_fr = {"janvier":1,"février":2,"mars":3,"avril":4,"mai":5,
+                       "juin":6,"juillet":7,"août":8,"septembre":9,
+                       "octobre":10,"novembre":11,"décembre":12}
+            m = re.search(r'(\d+)\s+(\w+)\s+(\d{4})', periode)
+            if m:
+                jour, mois_txt, annee = int(m.group(1)), m.group(2).lower(), int(m.group(3))
+                mois_num = mois_fr.get(mois_txt, 0)
+                if mois_num and date(annee, mois_num, jour) == monday:
+                    return True
+            return False
+        except Exception:
+            return False
+
+    if _periode_coherente(periode_stockee, wk):
+        periode = periode_stockee
+    else:
+        # La période stockée ne correspond pas → utiliser le label calculé
+        periode = week_label(wk)
+
     st.markdown(f"**Semaine :** {week_label(wk)}  —  *{periode}*")
 
     st.markdown("### 📤 Bon de commande traiteur")
