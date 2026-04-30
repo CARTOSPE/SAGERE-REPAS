@@ -525,6 +525,283 @@ with st.sidebar:
                        key="week_select_box", label_visibility="collapsed")
     st.session_state.week_sel = wks[labels.index(sel)]
 
+
+# Export déduction paie (niveau module — pas dans un elif)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Catégories qui font un "repas complet" (en plus du plat)
+CAT_COMPLEMENT = {"Entrées", "Produits laitiers", "Desserts"}
+CAT_PLAT       = {"Plats garnis", "Accompagnements"}
+
+def classifier_repas(jour_cmds):
+    """
+    Analyse les commandes d'un salarié pour un jour.
+    Retourne : 'complet' | 'plat_unique' | 'rien'
+    jour_cmds = {cat: [items], ...}  (peut contenir clés 'Carte · XXX' aussi)
+    """
+    a_plat = False
+    a_complement = False
+    for cat, items in jour_cmds.items():
+        if not items: continue
+        # Normaliser : 'Carte · Entrées' → 'Entrées' etc.
+        cat_base = cat.replace("Carte · ", "")
+        if cat_base in CAT_PLAT:
+            a_plat = True
+        if cat_base in CAT_COMPLEMENT:
+            a_complement = True
+    if not a_plat and not a_complement:
+        return "rien"
+    if a_plat and a_complement:
+        return "complet"
+    if a_plat and not a_complement:
+        return "plat_unique"
+    # Seulement entrée/dessert sans plat → complet quand même
+    if a_complement:
+        return "complet"
+    return "rien"
+
+def build_export_paie(commandes_multi, salaries, semaines):
+    """
+    Export déduction paie multi-semaines.
+    commandes_multi = {wk: {sal: {jour: {cat: [items]}}}}
+    semaines = [(wk, label, periode), ...]
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Déduction paie"
+
+    def fill(h): return PatternFill("solid", fgColor=h.lstrip("#"))
+    thin = Border(**{s: Side(style="thin", color="444870")
+                     for s in ("left","right","top","bottom")})
+    thick_left = Border(left=Side(style="medium", color="5B7FE8"),
+                        right=Side(style="thin", color="444870"),
+                        top=Side(style="thin", color="444870"),
+                        bottom=Side(style="thin", color="444870"))
+
+    # ── Titre ──
+    ws.merge_cells("A1:Z1")
+    ws["A1"] = f"SAGERE — Déduction paie repas  |  Édité le {datetime.now().strftime('%d/%m/%Y à %H:%M')}"
+    ws["A1"].font = Font(name="Calibri", bold=True, size=14, color="FFFFFF")
+    ws["A1"].fill = fill("1E2240")
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 32
+
+    # ── Construction du tableau : une section par semaine ──
+    current_row = 2
+
+    for wk, lbl, periode in semaines:
+        wk_cmds = commandes_multi.get(wk, {})
+
+        # En-tête semaine
+        nb_cols = 1 + len(JOURS) * 2 + 2  # Salarié + (C+P)*5jours + Total C + Total P
+        ws.merge_cells(start_row=current_row, start_column=1,
+                        end_row=current_row, end_column=nb_cols)
+        cell = ws.cell(row=current_row, column=1,
+                        value=f"  {lbl}  |  {periode}")
+        cell.font = Font(name="Calibri", bold=True, size=11, color="C0D8F8")
+        cell.fill = fill("1A3A68")
+        cell.alignment = Alignment(vertical="center")
+        ws.row_dimensions[current_row].height = 22
+        current_row += 1
+
+        # Sous-en-têtes : Salarié | Lun C | Lun P | Mar C | ... | Total C | Total P
+        ws.cell(row=current_row, column=1, value="Salarié").font = Font(bold=True, color="FFFFFF", size=9)
+        ws.cell(row=current_row, column=1).fill = fill("2B3270")
+        ws.cell(row=current_row, column=1).border = thin
+
+        col = 2
+        for jour in JOURS:
+            # Fusionner les 2 colonnes du jour
+            ws.merge_cells(start_row=current_row, start_column=col,
+                            end_row=current_row, end_column=col+1)
+            c = ws.cell(row=current_row, column=col, value=jour[:3].upper())
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.fill = fill("2B3270")
+            c.alignment = Alignment(horizontal="center")
+            c.border = thin
+            col += 2
+
+        # Totaux
+        for lbl_t, clr in [("Tot. Complet","1A4A28"),("Tot. Plat unique","3A3A1A")]:
+            c = ws.cell(row=current_row, column=col, value=lbl_t)
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.fill = fill(clr)
+            c.alignment = Alignment(horizontal="center", wrap_text=True)
+            c.border = thin
+            col += 1
+        ws.row_dimensions[current_row].height = 28
+        current_row += 1
+
+        # Ligne légende C/P
+        ws.cell(row=current_row, column=1, value="").fill = fill("2B3270")
+        ws.cell(row=current_row, column=1).border = thin
+        col = 2
+        for _ in JOURS:
+            for lbl_cp, clr_cp in [("C","1A4A28"),("P","3A3A1A")]:
+                c = ws.cell(row=current_row, column=col, value=lbl_cp)
+                c.font = Font(bold=True, size=8, color="FFFFFF")
+                c.fill = fill(clr_cp)
+                c.alignment = Alignment(horizontal="center")
+                c.border = thin
+                col += 1
+        for _ in range(2):
+            ws.cell(row=current_row, column=col).fill = fill("2B3270")
+            ws.cell(row=current_row, column=col).border = thin
+            col += 1
+        ws.row_dimensions[current_row].height = 16
+        current_row += 1
+
+        # Lignes salariés
+        for sal in salaries:
+            sal_cmds = wk_cmds.get(sal, {})
+            tot_c = tot_p = 0
+            col = 2
+            ws.cell(row=current_row, column=1, value=sal)
+            ws.cell(row=current_row, column=1).font = Font(size=9, bold=True)
+            ws.cell(row=current_row, column=1).border = thick_left
+
+            for jour in JOURS:
+                type_repas = classifier_repas(sal_cmds.get(jour, {}))
+                est_c = (type_repas == "complet")
+                est_p = (type_repas == "plat_unique")
+                if est_c: tot_c += 1
+                if est_p: tot_p += 1
+
+                # Colonne Complet
+                c = ws.cell(row=current_row, column=col,
+                             value="✓" if est_c else "")
+                c.fill = fill("0D3020" if est_c else "1E2240")
+                c.font = Font(bold=True, size=10,
+                               color="60E890" if est_c else "444870")
+                c.alignment = Alignment(horizontal="center")
+                c.border = thin
+                col += 1
+
+                # Colonne Plat unique
+                c = ws.cell(row=current_row, column=col,
+                             value="✓" if est_p else "")
+                c.fill = fill("2A2A0A" if est_p else "1E2240")
+                c.font = Font(bold=True, size=10,
+                               color="E8E060" if est_p else "444870")
+                c.alignment = Alignment(horizontal="center")
+                c.border = thin
+                col += 1
+
+            # Totaux
+            for val, clr_bg, clr_fg in [
+                (tot_c, "0D3020", "60E890"),
+                (tot_p, "2A2A0A", "E8E060"),
+            ]:
+                c = ws.cell(row=current_row, column=col,
+                             value=val if val > 0 else "")
+                c.font = Font(bold=True, size=11, color=clr_fg if val>0 else "444870")
+                c.fill = fill(clr_bg)
+                c.alignment = Alignment(horizontal="center")
+                c.border = thin
+                col += 1
+
+            ws.row_dimensions[current_row].height = 16
+            current_row += 1
+
+        # Ligne totaux semaine
+        ws.cell(row=current_row, column=1, value="TOTAL SEMAINE").font = Font(bold=True, size=9, color="C0D8F8")
+        ws.cell(row=current_row, column=1).fill = fill("1A3A68")
+        ws.cell(row=current_row, column=1).border = thin
+        col = 2
+        for jour in JOURS:
+            tot_j_c = sum(1 for sal in salaries
+                          if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "complet")
+            tot_j_p = sum(1 for sal in salaries
+                          if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "plat_unique")
+            for val, clr in [(tot_j_c,"60E890"),(tot_j_p,"E8E060")]:
+                c = ws.cell(row=current_row, column=col, value=val if val else "")
+                c.font = Font(bold=True, size=10, color=clr if val else "444870")
+                c.fill = fill("1A3A68")
+                c.alignment = Alignment(horizontal="center")
+                c.border = thin
+                col += 1
+
+        # Total général semaine (C et P)
+        tot_sem_c = sum(1 for sal in salaries for jour in JOURS
+                         if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "complet")
+        tot_sem_p = sum(1 for sal in salaries for jour in JOURS
+                         if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "plat_unique")
+        for val, clr in [(tot_sem_c,"60E890"),(tot_sem_p,"E8E060")]:
+            c = ws.cell(row=current_row, column=col, value=val if val else "")
+            c.font = Font(bold=True, size=11, color=clr if val else "444870")
+            c.fill = fill("1A3A68")
+            c.alignment = Alignment(horizontal="center")
+            c.border = thin
+            col += 1
+        ws.row_dimensions[current_row].height = 18
+        current_row += 2  # Ligne vide entre semaines
+
+    # ── Feuille récap global multi-semaines ──
+    ws2 = wb.create_sheet("Récap global")
+    ws2.merge_cells("A1:H1")
+    ws2["A1"] = "SAGERE — Récapitulatif global déduction paie"
+    ws2["A1"].font = Font(bold=True, size=13, color="FFFFFF")
+    ws2["A1"].fill = fill("1E2240")
+    ws2["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws2.row_dimensions[1].height = 28
+
+    # En-têtes
+    for c, h in enumerate(["Salarié"] + [week_label(s[0]) for s in semaines] +
+                            ["TOTAL Complet","TOTAL Plat unique","TOTAL Repas"], 1):
+        cell = ws2.cell(row=2, column=c, value=h)
+        cell.font = Font(bold=True, size=9, color="FFFFFF")
+        cell.fill = fill("2B3270")
+        cell.alignment = Alignment(horizontal="center" if c>1 else "left", wrap_text=True)
+        cell.border = thin
+    ws2.row_dimensions[2].height = 32
+
+    for sal in salaries:
+        row_data = [sal]
+        grand_c = grand_p = 0
+        for wk, _, _ in semaines:
+            wk_cmds = commandes_multi.get(wk, {})
+            sal_c = sum(1 for jour in JOURS
+                         if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "complet")
+            sal_p = sum(1 for jour in JOURS
+                         if classifier_repas(wk_cmds.get(sal,{}).get(jour,{})) == "plat_unique")
+            row_data.append(f"C:{sal_c}  P:{sal_p}" if (sal_c+sal_p) else "—")
+            grand_c += sal_c; grand_p += sal_p
+        row_data += [grand_c or "", grand_p or "", (grand_c+grand_p) or ""]
+        r = ws2.max_row + 1
+        for ci, val in enumerate(row_data, 1):
+            c = ws2.cell(row=r, column=ci, value=val)
+            c.font = Font(size=9)
+            c.border = thin
+            if ci == 1: c.font = Font(size=9, bold=True)
+            if ci > len(semaines)+1:
+                c.font = Font(bold=True, size=10,
+                               color="60E890" if ci==len(semaines)+2
+                               else "E8E060" if ci==len(semaines)+3 else "FFFFFF")
+                c.fill = fill("0D3020" if ci==len(semaines)+2
+                              else "2A2A0A" if ci==len(semaines)+3 else "1A2A4A")
+            c.alignment = Alignment(horizontal="center" if ci>1 else "left")
+        ws2.row_dimensions[r].height = 16
+
+    # Légende
+    r_leg = ws2.max_row + 2
+    ws2.cell(row=r_leg, column=1, value="Légende :").font = Font(bold=True, size=9, color="AAAAAA")
+    ws2.cell(row=r_leg+1, column=1,
+             value="C = Repas complet (avec entrée et/ou produit laitier et/ou dessert)").font = Font(size=8, color="60E890")
+    ws2.cell(row=r_leg+2, column=1,
+             value="P = Plat unique (plat garni et/ou accompagnement uniquement, sans entrée ni dessert)").font = Font(size=8, color="E8E060")
+
+    # Largeurs
+    ws.column_dimensions["A"].width = 22
+    for i in range(2, 2 + len(JOURS)*2 + 2):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 6
+    ws2.column_dimensions["A"].width = 22
+    for i in range(2, 2+len(semaines)+3):
+        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 18
+    ws.freeze_panes = "B3"
+    ws2.freeze_panes = "B3"
+
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0); return buf
+
     if st.session_state.page == "commande":
         # Salarié
         st.markdown('<p class="sidebar-label">SALARIÉ</p>', unsafe_allow_html=True)
@@ -759,8 +1036,6 @@ elif st.session_state.page == "salaries":
         st.success("Liste mise à jour."); st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE : EXPORTS & ADMIN
-# ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "admin":
     st.markdown("## 📊 Exports & Administration")
     wk        = st.session_state.week_sel
@@ -796,7 +1071,72 @@ elif st.session_state.page == "admin":
                        use_container_width=True)
 
     st.markdown("---")
-    st.markdown("### 📈 Résumé des commandes")
+    st.markdown("### 💰 Export déduction paie")
+    st.markdown("*Repas complet vs plat unique, par salarié et par jour, sur une ou plusieurs semaines.*")
+
+    # Sélection de la plage de semaines
+    all_wks   = weeks_list(st.session_state.menus)
+    all_labels = [week_label(k) for k in all_wks]
+
+    col_from, col_to = st.columns(2)
+    with col_from:
+        idx_from = st.selectbox("Semaine de début", all_labels,
+                                 index=len(all_labels)-1,
+                                 key="paie_from")
+    with col_to:
+        idx_to = st.selectbox("Semaine de fin", all_labels,
+                               index=0,
+                               key="paie_to")
+
+    wk_from = all_wks[all_labels.index(idx_from)]
+    wk_to   = all_wks[all_labels.index(idx_to)]
+
+    # Trier pour que from <= to
+    if wk_from > wk_to:
+        wk_from, wk_to = wk_to, wk_from
+
+    semaines_sel = [(k, week_label(k),
+                     (lambda p, k: p if _periode_coherente(p, k) else week_label(k))(
+                         clean_periode(st.session_state.menus.get(k,{}).get("periode",""), k), k))
+                    for k in all_wks if wk_from <= k <= wk_to]
+
+    st.caption(f"{len(semaines_sel)} semaine(s) sélectionnée(s) : "
+               f"{', '.join(s[1] for s in semaines_sel)}")
+
+    # Légende
+    col_leg1, col_leg2 = st.columns(2)
+    with col_leg1:
+        st.markdown("🟢 **Repas complet** = plat + entrée et/ou produit laitier et/ou dessert")
+    with col_leg2:
+        st.markdown("🟡 **Plat unique** = plats garnis / accompagnements uniquement")
+
+    if semaines_sel:
+        # Aperçu rapide
+        with st.expander("👁 Aperçu des repas pour la semaine sélectionnée"):
+            preview_cmds = st.session_state.commandes.get(wk, {})
+            prev_rows = []
+            for sal in salaries:
+                row_p = {"Salarié": sal}
+                for jour in JOURS:
+                    t = classifier_repas(preview_cmds.get(sal,{}).get(jour,{}))
+                    row_p[jour] = {"complet":"🟢 Complet","plat_unique":"🟡 Plat","rien":"—"}[t]
+                prev_rows.append(row_p)
+            st.table(prev_rows)
+
+        buf_paie = build_export_paie(
+            st.session_state.commandes, salaries, semaines_sel)
+        fname = (f"DeductionPaie_{wk_from}_au_{wk_to}.xlsx"
+                 if wk_from != wk_to else f"DeductionPaie_{wk_from}.xlsx")
+        st.download_button(
+            "⬇ Télécharger export déduction paie (Excel)",
+            data=buf_paie,
+            file_name=fname,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        st.warning("Aucune semaine dans la plage sélectionnée.")
     if not commandes:
         st.info("Aucune commande enregistrée pour cette semaine.")
     else:
